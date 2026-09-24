@@ -15,9 +15,15 @@ cask "macstroke" do
 
   app "MacStroke.app"
 
+  uninstall quit: "net.mtjo.MacStroke"
+
   zap trash: [
+    "~/Library/Application Scripts/net.mtjo.MacStroke.FinderSyncExtension",
     "~/Library/Application Support/MacStroke",
     "~/Library/Caches/MacStroke",
+    "~/Library/Caches/net.mtjo.MacStroke",
+    "~/Library/Containers/net.mtjo.MacStroke.FinderSyncExtension",
+    "~/Library/Cookies/net.mtjo.MacStroke.binarycookies",
     "~/Library/Preferences/net.mtjo.MacStroke.plist",
   ]
 end
