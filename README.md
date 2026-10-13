@@ -35,10 +35,19 @@ MacStroke 要读全局鼠标事件，必须手动开辅助功能：系统设置 
 
 ## 发版时改这里
 
+cask 由本仓库的 [`macstroke-sync`](.github/workflows/macstroke-sync.yml) 自动跟进：
+每 30 分钟读 `mtjo/MacStroke` 最新的 release，把 `version` 与附件 `MacStroke.zip` 的
+sha256（GitHub 上传时算好的 asset `digest`）写进 [`Casks/macstroke.rb`](Casks/macstroke.rb)，
+两行都变才提交，提交前过 `ruby -c`。也就是说发版这边**不用手工改文件**，代价是 brew
+可装最多滞后半小时。
+
+想立刻同步就去 Actions 页手动跑一次 `macstroke-sync`（workflow_dispatch）。
+
+手工兜底（那条 workflow 挂了才需要）：
+
 1. 在 MacStroke 仓库跑 `./build_app.sh` + `./make_release.sh`，把 zip 传成 GitHub
    release `<版本号>` 的资源 `MacStroke.zip`。
-2. `shasum -a 256` 下载回来的 `MacStroke.zip`，把结果写进
-   [`Casks/macstroke.rb`](Casks/macstroke.rb) 的 `sha256`，同时改 `version`。
+2. `shasum -a 256` 下载回来的 `MacStroke.zip`，把结果写进 cask 的 `sha256`，同时改 `version`。
 3. 提交推送后本地校验：
 
    ```
