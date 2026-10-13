@@ -1,0 +1,99 @@
+# MacStroke 的 cask 自动跟上 GitHub 上最新的 release。
+#
+# 为什么放在 tap 这边而不是 MacStroke 的发版流水线里：跨仓库写入必须额外给一条 PAT，
+# 而那条专给 macstroke 的 fine-grained PAT 在 2026-10-13 建好、用了不到 40 分钟就
+# 报 401 Bad credentials，把它当发版的必经环节不可靠。这里用本仓库自带的
+# GITHUB_TOKEN 就能提交，读 mtjo/MacStroke 的公开 release 也不需要任何凭据。
+#
+# 代价是发布到 brew 可装之间最多滞后一个调度周期（30 分钟）。
+name: macstroke-sync
+
+on:
+  schedule:
+    - cron: "*/30 * * * *"
+  workflow_dispatch: {}
+
+permissions:
+  contents: write
+
+concurrency:
+  group: macstroke-sync
+  cancel-in-progress: false
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    env:
+      # gh 在 Actions 里不会自动吃到 GITHUB_TOKEN，必须显式给
+      GH_TOKEN: ${{ github.token }}
+      CASK: Casks/macstroke.rb
+
+    steps:
+      - name: 检出 tap
+        uses: actions/checkout@v4
+
+      - name: 取最新 release 的版本号与包校验值
+        run: |
+          set -euo pipefail
+          VER="$(gh api repos/mtjo/MacStroke/releases/latest --jq .tag_name)"
+          echo "${VER}" | grep -Eq '^[0-9]+(\.[0-9]+)*$' \
+            || { echo "❌ releases/latest 给的 tag 不像版本号：'${VER}'" >&2; exit 1; }
+          # asset 的 digest 是 GitHub 上传时自己算的 sha256，也就是用户从 url 拿到的那份
+          # 字节，直接用最省事；没有这个字段再退回下载整包算。
+          DIGEST="$(gh api "repos/mtjo/MacStroke/releases/tags/${VER}" \
+            --jq '([.assets[] | select(.name=="MacStroke.zip") | .digest][0]) // ""')"
+          if [ -z "${DIGEST}" ]; then
+            echo "… API 没带 digest，回读线上包自算"
+            curl -sSLf \
+              "https://github.com/mtjo/MacStroke/releases/download/${VER}/MacStroke.zip" \
+              -o "${RUNNER_TEMP}/MacStroke.zip"
+            DIGEST="$(sha256sum "${RUNNER_TEMP}/MacStroke.zip" | cut -d' ' -f1)"
+          else
+            DIGEST="${DIGEST#sha256:}"
+          fi
+          case "${DIGEST}" in
+            *[!0-9a-f]*|"") { echo "❌ 拿不到 64 位十六进制的 sha256，得到 '${DIGEST}'"; exit 1; };;
+          esac
+          [ "${#DIGEST}" = 64 ] || { echo "❌ digest 长度 ${#DIGEST} 不是 64" >&2; exit 1; }
+          echo "VERSION=${VER}" >> "$GITHUB_ENV"
+          echo "SHA256=${DIGEST}" >> "$GITHUB_ENV"
+          echo "📦 ${VER} ${DIGEST}"
+
+      - name: 改写 cask 并提交
+        run: |
+          set -euo pipefail
+          python3 - "${VERSION}" "${SHA256}" "${CASK}" <<'PY'
+          import pathlib, re, sys
+          ver, sha, path = sys.argv[1], sys.argv[2], pathlib.Path(sys.argv[3])
+          text = path.read_text()
+          cur_v = re.search(r'(?m)^(\s*version\s)"([^"\n]*)"', text).group(2)
+          cur_s = re.search(r'(?m)^(\s*sha256\s)"([^"\n]*)"', text).group(2)
+          if (cur_v, cur_s) == (ver, sha):
+              print(f"♻️  cask 已经是 {ver} 且 sha256 一致，不动文件")
+              sys.exit(0)
+          print(f"… {cur_v} / {cur_s[:12]}… → {ver} / {sha[:12]}…")
+          # 只认行首这两行；命中数不是 1 就失败，别把 cask 改一半推上去
+          # 替换值走 lambda：模板串里 \" 会连反斜杠一起写进结果，cask 就废了
+          new, n1 = re.subn(r'(?m)^(\s*version\s)"[^"\n]*"', lambda m: m.group(1) + '"' + ver + '"', text)
+          new, n2 = re.subn(r'(?m)^(\s*sha256\s)"[^"\n]*"', lambda m: m.group(1) + '"' + sha + '"', new)
+          assert n1 == 1 and n2 == 1, f"version 命中 {n1} 处、sha256 命中 {n2} 处，应各 1 处"
+          path.write_text(new)
+          PY
+          if git diff --quiet -- "${CASK}"; then
+            echo "✅ 无需提交"
+            exit 0
+          fi
+          NUMSTAT="$(git diff --numstat -- "${CASK}")"
+          echo "${NUMSTAT}"
+          # 期望只有版本号与校验值各一行变更；多出来就是改到了别处
+          [ "$(printf '%s\n' "${NUMSTAT}" | awk '{s+=$1+$2} END {print s}')" = 4 ] \
+            || { echo "❌ 变更行数不是 4（version/sha256 各 1 增 1 删），不提交" >&2; exit 1; }
+          ruby -c "${CASK}" >/dev/null
+          git config user.name "$(git log -1 --format=%an)"
+          git config user.email "$(git log -1 --format=%ae)"
+          git add "${CASK}"
+          git commit -m "macstroke ${VERSION}"
+          # 显式给 refspec：Actions 的 checkout 是按需 fetch 的，本地分支不一定带
+          # upstream 配置，裸 `git push` 会报 "has no upstream branch"
+          git push origin "HEAD:refs/heads/${GITHUB_REF_NAME}"
+          echo "✅ 已提交 macstroke ${VERSION}"
