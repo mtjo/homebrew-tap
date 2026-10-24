@@ -1,6 +1,6 @@
 cask "macstroke" do
-  version "3.1.9"
-  sha256 "e1d6ec536202e1edaf3d3f3c70adae941370652bfd4d51a3c2af0a2448e85def"
+  version "3.2.0"
+  sha256 "d38cf34c52ed9837e3f066e45c820ef0bf010fe0ea564cc5f5c25353ddeb30b1"
 
   # 通用二进制（arm64 + x86_64）打成同一个包，所以没有按 arch 分支的产物。
   url "https://github.com/mtjo/MacStroke/releases/download/#{version}/MacStroke.zip"
